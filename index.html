@@ -38,8 +38,18 @@ textarea{min-height:110px;resize:vertical}
 <h2>방 만들기 / 입장하기</h2>
 <input id="name" placeholder="내 이름" maxlength="24">
 <input id="code" placeholder="방 코드 (새 방은 비워 두세요)" maxlength="10">
+<input id="adminPassword" type="password" placeholder="이안만 관리자 비밀번호 입력" autocomplete="off">
 <button id="start">시작하기</button>
-<p class="muted">새 방은 코드를 비워 두고 시작해. 친구들은 방 코드를 입력하면 돼.</p>
+<p class="muted">이안은 관리자 비밀번호를 입력해. 다른 친구들은 비워 둬도 돼.</p>
+</section>
+
+<section class="panel" id="adminPanel">
+<h2>👑 이안 관리자 · 참가자 관리</h2>
+<p class="muted">이미 사용 중인 이름도 여기에서 삭제할 수 있어. 관리자 비밀번호가 필요해.</p>
+<input id="adminCode" placeholder="관리할 방 코드" maxlength="10">
+<input id="adminKey" type="password" placeholder="관리자 비밀번호" autocomplete="off">
+<button id="adminLoad" class="secondary">참가자 목록 불러오기</button>
+<div id="memberList"></div>
 </section>
 
 <section id="room" class="hidden">
@@ -49,12 +59,6 @@ textarea{min-height:110px;resize:vertical}
 <p class="muted">참가자: <span id="members"></span></p>
 <button id="copy" class="secondary">초대 메시지 복사</button>
 <button id="leave" class="secondary">나가기 (이 기기에서만)</button>
-</div>
-
-<div class="panel hidden" id="adminPanel">
-<h2>👑 참가자 관리</h2>
-<p class="muted">참가자를 선택해 삭제할 수 있어.</p>
-<div id="memberList"></div>
 </div>
 
 <div class="panel">
@@ -74,7 +78,7 @@ textarea{min-height:110px;resize:vertical}
 </div>
 </section>
 
-<p class="muted">방 코드를 아는 사람은 새 이름으로 입장할 수 있어. 민감한 정보는 보내지 마. 휴대폰 푸시 알림은 지원하지 않아.</p>
+<p class="muted">방 코드는 친구들에게만 공유해. 민감한 정보는 보내지 마. 휴대폰 푸시 알림은 지원하지 않아.</p>
 </main>
 
 <script>
@@ -96,7 +100,7 @@ async function api(data){
  });
  let v;
  try{v=await r.json()}
- catch{throw Error('서버에 연결할 수 없어. Netlify Functions 배포를 확인해 줘.')}
+ catch{throw Error('서버 연결을 확인해 줘.')}
  if(!r.ok)throw Error(v.error||'오류가 발생했어.');
  return v;
 }
@@ -106,60 +110,113 @@ function show(){
  $('room').classList.remove('hidden');
  $('roomCode').textContent=session.code;
  $('myName').textContent=session.name;
- $('adminPanel').classList.toggle('hidden',session.name!=='이안');
+ $('adminCode').value=session.code;
  update();
 }
 
 $('start').onclick=async()=>{
  const name=$('name').value.trim();
  const code=$('code').value.trim().toUpperCase();
+ const adminPassword=$('adminPassword').value;
+
  if(!name)return notify('이름을 입력해 줘.');
+
  $('start').disabled=true;
  try{
-  session=await api({action:code?'join':'create',name,code});
+  session=await api({
+   action:code?'join':'create',
+   name,code,adminPassword
+  });
   localStorage.setItem('manitto-session',JSON.stringify(session));
+  $('adminPassword').value='';
   show();
  }catch(e){notify(e.message)}
  finally{$('start').disabled=false}
 };
 
-function renderAdmin(members){
+async function loadAdmin(){
+ const code=$('adminCode').value.trim().toUpperCase();
+ const adminPassword=$('adminKey').value;
+
+ if(!code||!adminPassword){
+  return notify('방 코드와 관리자 비밀번호를 입력해 줘.');
+ }
+
+ $('adminLoad').disabled=true;
+ try{
+  const result=await api({
+   action:'adminState',
+   code,adminPassword
+  });
+  renderAdmin(result.members,code);
+ }catch(e){notify(e.message)}
+ finally{$('adminLoad').disabled=false}
+}
+
+function renderAdmin(members,code){
  const list=$('memberList');
  list.replaceChildren();
- if(session.name!=='이안')return;
+
+ if(!members.length){
+  list.textContent='등록된 참가자가 없어.';
+  return;
+ }
 
  for(const m of members){
-  if(m.uid===session.uid)continue;
   const row=document.createElement('div');
   row.className='member-row';
+
   const label=document.createElement('span');
   label.textContent=m.name;
+
   const btn=document.createElement('button');
   btn.className='danger';
   btn.textContent='삭제';
-  btn.onclick=()=>deleteMember(m);
+
+  if(session&&m.uid===session.uid){
+   btn.disabled=true;
+   btn.textContent='내 계정';
+  }else{
+   btn.onclick=()=>deleteMember(m,code);
+  }
+
   row.append(label,btn);
   list.append(row);
  }
- if(!list.children.length)list.textContent='삭제할 참가자가 없어.';
 }
 
-async function deleteMember(member){
- if(!session||session.name!=='이안')return;
+async function deleteMember(member,code){
+ const adminPassword=$('adminKey').value;
+
+ if(!adminPassword){
+  return notify('관리자 비밀번호를 입력해 줘.');
+ }
+
  if(!confirm(member.name+' 참가자를 정말 삭제할까?'))return;
+
  try{
-  await api({...session,action:'deleteMember',targetUid:member.uid});
+  await api({
+   action:'adminDelete',
+   code,
+   adminPassword,
+   target:member.uid
+  });
   notify(member.name+' 참가자를 삭제했어.');
-  await update();
+  await loadAdmin();
+  if(session)await update();
  }catch(e){notify(e.message)}
 }
 
+$('adminLoad').onclick=loadAdmin;
+
 async function update(){
  if(!session)return;
+
  try{
   const state=await api({...session,action:'state'});
-  $('members').textContent=state.members.map(m=>m.name).join(', ');
-  renderAdmin(state.members);
+
+  $('members').textContent=
+   state.members.map(m=>m.name).join(', ');
 
   const prev=$('recipient').value;
   $('recipient').replaceChildren();
@@ -170,20 +227,25 @@ async function update(){
    o.textContent=m.name;
    $('recipient').append(o);
   }
+
   if([...$('recipient').options].some(o=>o.value===prev)){
    $('recipient').value=prev;
   }
 
   const box=$('inbox');
   box.replaceChildren();
+
   if(!state.messages.length){
    box.textContent='아직 메시지가 없어.';
   }else{
    for(const m of state.messages){
     const d=document.createElement('div');
     d.className='message';
+
     const time=document.createElement('small');
-    time.textContent='🎁 익명의 마니또 · '+new Date(m.time).toLocaleString('ko-KR');
+    time.textContent='🎁 익명의 마니또 · '+
+     new Date(m.time).toLocaleString('ko-KR');
+
     const p=document.createElement('div');
     p.textContent=m.body;
     d.append(time,p);
@@ -191,7 +253,8 @@ async function update(){
    }
   }
  }catch(e){
-  if(e.message.includes('인증')||e.message.includes('다시 입장')){
+  if(e.message.includes('인증')||
+     e.message.includes('다시 입장')){
    localStorage.removeItem('manitto-session');
    session=null;
    $('room').classList.add('hidden');
@@ -203,9 +266,12 @@ async function update(){
 
 $('send').onclick=async()=>{
  if(!session)return;
+
  const to=$('recipient').value;
  const body=$('message').value.trim();
+
  if(!to||!body)return notify('친구와 메시지를 입력해 줘.');
+
  $('send').disabled=true;
  try{
   await api({...session,action:'send',to,body});
@@ -247,3 +313,4 @@ setInterval(()=>{
 </script>
 </body>
 </html>
+
